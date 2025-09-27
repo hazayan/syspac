@@ -1,0 +1,3 @@
+[submodule "valent"]
+	path = valent
+	url = git@github.com:ylabidi/aur-valent.git

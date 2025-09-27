@@ -1,0 +1,157 @@
+name: Build and Update Repository
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+
+env:
+  RELEASE_TAG: repository
+  REPO_NAME: syspac
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code with submodules
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Create repository directory
+        run: |
+          mkdir -p repo/x86_64
+
+      - name: Build builder image
+        run: |
+          docker build -t package-builder build-container/
+
+      - name: Detect changed packages
+        id: changes
+        run: |
+          # List all packages (both submodules and direct)
+          echo "Scanning for packages..."
+
+          # First, check direct packages (directories containing PKGBUILD)
+          DIRECT_PKGS=$(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \; | \
+                       while read -r dir; do
+                         dir=${dir#./}  # Remove leading ./
+                         if [ -d "$dir" ] && [ ! -d "$dir/.git" ]; then
+                           echo "$dir"
+                         fi
+                       done)
+
+          # Then, check submodules
+          SUBMODULE_PKGS=$(git submodule status | awk '{print $2}' | \
+                          while read -r dir; do
+                            if [ -f "$dir/PKGBUILD" ]; then
+                              echo "$dir"
+                            fi
+                          done)
+
+          # Combine both lists
+          ALL_PKGS=$(echo -e "${DIRECT_PKGS}\n${SUBMODULE_PKGS}" | sort -u | grep -v '^$')
+
+          # If this is a PR, get changed files from the PR
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "Processing pull request..."
+            CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} --json files --jq '.files[].path')
+          else
+            echo "Processing push..."
+            # For push events, if we can get the previous commit, use it
+            # otherwise consider all packages as changed
+            if git rev-parse HEAD^ >/dev/null 2>&1; then
+              CHANGED_FILES=$(git diff --name-only HEAD^)
+            else
+              echo "No previous commit found, considering all packages as changed"
+              CHANGED_FILES=$(find . -type f)
+            fi
+          fi
+
+          # Find which packages have changes
+          FINAL_CHANGES=$(echo "$ALL_PKGS" | while read -r pkg; do
+            if echo "$CHANGED_FILES" | grep -q "^$pkg/"; then
+              echo "$pkg"
+            fi
+          done | tr '\n' ' ')
+
+          # If no changes detected but we have packages, build all
+          if [ -z "$FINAL_CHANGES" ] && [ -n "$ALL_PKGS" ]; then
+            echo "No specific changes detected, building all packages"
+            FINAL_CHANGES=$(echo "$ALL_PKGS" | tr '\n' ' ')
+          fi
+
+          echo "Packages to build: $FINAL_CHANGES"
+          echo "packages=${FINAL_CHANGES}" >> $GITHUB_OUTPUT
+
+      - name: Import GPG key
+        if: steps.changes.outputs.packages != ''
+        run: |
+          gpg --import --no-tty <<<"${{ secrets.GPG_KEY }}"
+          gpg --import-ownertrust --no-tty <<<"${{ vars.GPG_KEY_ID }}:5:"
+
+      - name: Build packages
+        if: steps.changes.outputs.packages != ''
+        run: |
+          docker run --rm \
+            --privileged \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e CHANGED_PACKAGES="${{ steps.changes.outputs.packages }}" \
+            -e GPG_KEY_DATA="${{ secrets.GPG_KEY }}" \
+            -e GPG_KEY_ID="${{ vars.GPG_KEY_ID }}" \
+            -v ${{ github.workspace }}:/build \
+            -v ${{ github.workspace }}/repo:/repo \
+            package-builder
+
+      - name: Update Release
+        if: steps.changes.outputs.packages != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ensure the directory has at least one file
+          if [ ! "$(ls -A repo/x86_64)" ]; then
+            echo "This directory is reserved for x86_64 packages" > "repo/x86_64/README.txt"
+          fi
+
+          # Delete existing release and tag
+          gh release delete ${{ env.RELEASE_TAG }} --yes || true
+          git tag -d ${{ env.RELEASE_TAG }} || true
+          git push origin :refs/tags/${{ env.RELEASE_TAG }} || true
+
+          # Create new release
+          gh release create ${{ env.RELEASE_TAG }} \
+            --title "Package Repository" \
+            --notes "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            repo/x86_64/*
+
+          # Force update tag
+          git tag -f ${{ env.RELEASE_TAG }}
+          git push -f origin ${{ env.RELEASE_TAG }}
+
+      - name: Upload Build Logs
+        if: always() && steps.changes.outputs.packages != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            repo/build-output.txt
+            repo/*-build.log
+          retention-days: 7
+          if-no-files-found: warn
