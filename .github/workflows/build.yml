@@ -6,11 +6,6 @@ on:
     paths-ignore:
       - "**.md"
       - "LICENSE"
-  #pull_request:
-  #  branches: [main]
-  #  paths-ignore:
-  #    - "**.md"
-  #    - "LICENSE"
 
 env:
   RELEASE_TAG: repository
@@ -46,60 +41,77 @@ jobs:
       - name: Detect changed packages
         id: changes
         run: |
-          # List all packages (both submodules and direct)
-          echo "Scanning for packages..."
+          # Function to get base ref for comparison
+          get_base_ref() {
+            # For push events, use the parent of the current commit
+            git rev-parse HEAD^
+          }
 
-          # First, check direct packages (directories containing PKGBUILD)
-          DIRECT_PKGS=$(find . -maxdepth 2 -name PKGBUILD -exec dirname {} \; | \
-                       while read -r dir; do
-                         dir=${dir#./}  # Remove leading ./
-                         if [ -d "$dir" ] && [ ! -d "$dir/.git" ]; then
-                           echo "$dir"
-                         fi
-                       done)
-
-          # Then, check submodules
-          SUBMODULE_PKGS=$(git submodule status | awk '{print $2}' | \
-                          while read -r dir; do
-                            if [ -f "$dir/PKGBUILD" ]; then
-                              echo "$dir"
-                            fi
-                          done)
-
-          # Combine both lists
-          ALL_PKGS=$(echo -e "${DIRECT_PKGS}\n${SUBMODULE_PKGS}" | sort -u | grep -v '^$')
-
-          # If this is a PR, get changed files from the PR
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "Processing pull request..."
-            CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} --json files --jq '.files[].path')
-          else
-            echo "Processing push..."
-            # For push events, if we can get the previous commit, use it
-            # otherwise consider all packages as changed
-            if git rev-parse HEAD^ >/dev/null 2>&1; then
-              CHANGED_FILES=$(git diff --name-only HEAD^)
+          # Function to get package version from PKGBUILD
+          get_pkg_version() {
+            local pkgbuild="$1"
+            if [ -f "$pkgbuild" ]; then
+              # Source PKGBUILD in a subshell to get version safely
+              (source "$pkgbuild" 2>/dev/null && echo "${pkgver}-${pkgrel}") || echo "unknown"
             else
-              echo "No previous commit found, considering all packages as changed"
-              CHANGED_FILES=$(find . -type f)
+              echo "unknown"
             fi
-          fi
+          }
 
-          # Find which packages have changes
-          FINAL_CHANGES=$(echo "$ALL_PKGS" | while read -r pkg; do
-            if echo "$CHANGED_FILES" | grep -q "^$pkg/"; then
-              echo "$pkg"
+          # Get base ref for comparison
+          BASE_REF=$(get_base_ref) || BASE_REF=""
+
+          # Get list of all package directories
+          mapfile -t ALL_PKGS < <(
+            # List submodules with PKGBUILD
+            git submodule foreach --quiet 'if [ -f "PKGBUILD" ]; then echo "$name"; fi'
+            # List direct directories with PKGBUILD
+            find . -maxdepth 2 -name PKGBUILD -exec dirname {} \; | while read -r dir; do
+              dir=${dir#./}
+              if [ -d "$dir" ] && [ ! -d "$dir/.git" ]; then
+                echo "$dir"
+              fi
+            done | sort -u
+          )
+
+          # Initialize arrays for changed and unchanged packages
+          CHANGED_PKGS=()
+          UNCHANGED_PKGS=()
+
+          echo "Checking for package changes..."
+          for pkg in "${ALL_PKGS[@]}"; do
+            if [ -z "$BASE_REF" ]; then
+              # If no base ref (first push), consider package as changed
+              echo "First push or base not available - will build $pkg"
+              CHANGED_PKGS+=("$pkg")
+              continue
             fi
-          done | tr '\n' ' ')
 
-          # If no changes detected but we have packages, build all
-          if [ -z "$FINAL_CHANGES" ] && [ -n "$ALL_PKGS" ]; then
-            echo "No specific changes detected, building all packages"
-            FINAL_CHANGES=$(echo "$ALL_PKGS" | tr '\n' ' ')
-          fi
+            # Check if package files changed
+            if git diff --quiet "$BASE_REF" -- "$pkg"; then
+              if [ -f "$pkg/PKGBUILD" ]; then
+                echo "$pkg: No changes detected, skipping"
+                UNCHANGED_PKGS+=("$pkg")
+              fi
+            else
+              echo "$pkg: Changes detected, will rebuild"
+              CHANGED_PKGS+=("$pkg")
+            fi
+          done
 
-          echo "Packages to build: $FINAL_CHANGES"
+          # Convert array to space-separated string
+          FINAL_CHANGES=$(IFS=' '; echo "${CHANGED_PKGS[*]}")
+
+          # Output results
+          echo "Changed packages to build: $FINAL_CHANGES"
           echo "packages=${FINAL_CHANGES}" >> $GITHUB_OUTPUT
+
+          # Debug information
+          echo "Debug information:"
+          echo "Base ref: $BASE_REF"
+          echo "Total packages found: ${#ALL_PKGS[@]}"
+          echo "Packages to build: ${#CHANGED_PKGS[@]}"
+          echo "Packages skipped: ${#UNCHANGED_PKGS[@]}"
 
       - name: Import GPG key
         if: steps.changes.outputs.packages != ''
