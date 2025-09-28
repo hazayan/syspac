@@ -1,3 +1,6 @@
 [submodule "valent"]
 	path = valent
 	url = git@github.com:ylabidi/aur-valent.git
+[submodule "ly"]
+	path = ly
+	url = git@github.com:ylabidi/pkg-ly.git
