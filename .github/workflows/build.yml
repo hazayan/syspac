@@ -12,12 +12,8 @@ env:
   REPO_NAME: syspac
 
 jobs:
-  build:
+  preflight:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-
     steps:
       - name: Checkout code with submodules
         uses: actions/checkout@v3
@@ -100,13 +96,24 @@ jobs:
           echo "Packages to build: ${#CHANGED_PKGS[@]}"
           echo "Packages skipped: ${#UNCHANGED_PKGS[@]}"
 
-      - name: Skip if commit has no package update
-        if: steps.changes.outputs.packages == ''
-        run: |
-          gh run cancel ${{ github.run_id }}
-          gh run watch ${{ github.run_id }}
-        env:
-          GH_TOKEN: ${{ secrets. GITHUB_TOKEN }}
+    outputs:
+      packages: ${{ steps.changes.outputs.packages }}
+
+
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    needs:
+      - preflight
+    if: needs.preflight.outputs.packages != ''
+
+    steps:
+      - name: Checkout code with submodules
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -132,7 +139,7 @@ jobs:
           docker run --rm \
             --privileged \
             -e GITHUB_REPOSITORY="${{ github.repository }}" \
-            -e CHANGED_PACKAGES="${{ steps.changes.outputs.packages }}" \
+            -e CHANGED_PACKAGES="${{ needs.preflight.outputs.packages }}" \
             -e GPG_KEY_DATA="${{ secrets.GPG_KEY }}" \
             -e GPG_KEY_ID="${{ vars.GPG_KEY_ID }}" \
             -v ${{ github.workspace }}:/build \
