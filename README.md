@@ -38,14 +38,22 @@ The binary will be available at `target/release/syspac`.
 Detect packages that have changed between commits:
 
 ```bash
-# Compare against parent commit (HEAD^)
+# Compare against parent commit (HEAD^) - returns package names
 syspac detect-changes
+# Output: niri valent
+
+# Return full paths (for Docker/scripts that need paths)
+syspac detect-changes --paths
+# Output: packages/niri packages/valent
 
 # Compare against a specific ref
 syspac detect-changes --base-ref main
 
 # Get ALL packages (for full rebuild)
 syspac detect-changes --all
+
+# Get all packages with paths
+syspac detect-changes --all --paths
 
 # Output as JSON
 syspac detect-changes --format json
@@ -55,19 +63,41 @@ syspac detect-changes --repo-path /path/to/repo
 ```
 
 **Output formats:**
-- `space` (default): Space-separated list of package names (e.g., "niri valent ly")
-- `json`: JSON array of package names
+- `space` (default): Space-separated list (e.g., "niri valent" or "packages/niri packages/valent")
+- `json`: JSON array of strings
+
+**Output modes:**
+- Default: Package names only (e.g., "niri")
+- `--paths`: Full relative paths (e.g., "packages/niri")
 
 ### List All Packages
 
 List all packages in the repository:
 
 ```bash
-# Simple list
+# Simple list (names only)
 syspac list-packages
+# Output:
+# connman-resolvd
+# ly
+# niri
+# valent
+
+# With full paths
+syspac list-packages --paths
+# Output:
+# packages/connman-resolvd
+# packages/ly
+# packages/niri
+# packages/valent
 
 # With version information
 syspac list-packages --verbose
+# Output:
+# connman-resolvd: 1.2.0-1
+# ly: 0.6.0-2
+# niri: 0.1.0-1
+# valent: 1.0.0-1
 
 # Specify repository path
 syspac list-packages --repo-path /path/to/repo
@@ -82,7 +112,7 @@ Extract version information from a PKGBUILD:
 syspac package-version /path/to/PKGBUILD
 
 # From a package directory (will look for PKGBUILD inside)
-syspac package-version /path/to/package-dir
+syspac package-version packages/niri
 ```
 
 ## Architecture
@@ -103,6 +133,7 @@ src/
    - Scans git submodules for PKGBUILD files
    - Searches direct directories (up to 2 levels) for PKGBUILD files
    - Filters out common non-package directories (.git, target, node_modules, etc.)
+   - Tracks both package name and full path
 
 2. **Change Detection** (`git.rs`):
    - Uses libgit2 to compare trees between commits
@@ -125,7 +156,8 @@ Replace the complex bash logic in your workflow with the Rust tool:
   id: changes
   run: |
     cargo build --release
-    CHANGED=$(./target/release/syspac detect-changes)
+    # Use --paths flag for Docker builds
+    CHANGED=$(./target/release/syspac detect-changes --paths)
     echo "packages=${CHANGED}" >> $GITHUB_OUTPUT
     echo "Changed packages: ${CHANGED}"
 ```
@@ -139,9 +171,9 @@ The workflow automatically handles full rebuilds triggered by slash commands:
   id: changes
   run: |
     if [[ "${{ github.event_name }}" == "repository_dispatch" ]] && [[ "${{ github.event.action }}" == "rebuild-all" ]]; then
-      CHANGED=$(./target/release/syspac detect-changes --all)
+      CHANGED=$(./target/release/syspac detect-changes --all --paths)
     else
-      CHANGED=$(./target/release/syspac detect-changes)
+      CHANGED=$(./target/release/syspac detect-changes --paths)
     fi
     echo "packages=${CHANGED}" >> $GITHUB_OUTPUT
 ```
@@ -167,7 +199,7 @@ This ensures that:
 - The pacman database includes all packages (old + new)
 - Users can always access all packages
 
-See `.github/workflows/build-rust.yml.example` for the complete workflow.
+See `.github/workflows/build.yml` for the complete workflow.
 
 ## Slash Commands
 
@@ -220,7 +252,11 @@ mapfile -t ALL_PKGS < <(git submodule foreach --quiet '...')
 
 ### After (Rust)
 ```bash
+# Get package names
 syspac detect-changes
+
+# Get package paths (for scripts)
+syspac detect-changes --paths
 ```
 
 **Benefits:**
@@ -230,6 +266,7 @@ syspac detect-changes
 - Consistent behavior across environments
 - Clear separation of concerns
 - Preserves unchanged packages in releases
+- Flexible output (names or paths)
 
 See [MIGRATION.md](MIGRATION.md) for a complete migration guide.
 
@@ -243,15 +280,19 @@ See [MIGRATION.md](MIGRATION.md) for a complete migration guide.
 - **Old**: Had to manually modify workflow or push all packages
 - **New**: Simple `/rebuild-all` comment triggers full rebuild
 
-### 3. Better Error Handling
+### 3. Path Handling
+- **Old**: Inconsistent path handling between different scripts
+- **New**: `--paths` flag for explicit path output when needed
+
+### 4. Better Error Handling
 - **Old**: Cryptic bash errors, silent failures
 - **New**: Detailed error messages with context
 
-### 4. Testability
+### 5. Testability
 - **Old**: Hard to test bash scripts
 - **New**: Comprehensive unit and integration tests
 
-### 5. Performance
+### 6. Performance
 - **Old**: Slow bash execution
 - **New**: Fast compiled binary
 
@@ -273,6 +314,14 @@ cargo build --release
 # niri: 0.1.0-1
 # valent: 1.0.0-1
 
+# List with paths
+./target/release/syspac list-packages --paths
+# Output:
+# packages/connman-resolvd
+# packages/ly
+# packages/niri
+# packages/valent
+
 # Make some changes to a package
 cd packages/niri
 # ... edit files ...
@@ -280,47 +329,21 @@ git add .
 git commit -m "Update niri to 0.1.1"
 cd ../..
 
-# Detect what changed
+# Detect what changed (names)
 ./target/release/syspac detect-changes
 # Output: niri
+
+# Detect what changed (paths for Docker)
+./target/release/syspac detect-changes --paths
+# Output: packages/niri
 
 # Get version of specific package
 ./target/release/syspac package-version packages/niri
 # Output: 0.1.1-1
 
 # Rebuild all packages (if needed)
-./target/release/syspac detect-changes --all
-# Output: connman-resolvd ly niri valent
-```
-
-## Repository Structure
-
-```
-syspac/
-├── .github/
-│   └── workflows/
-│       ├── build-rust.yml.example    # Example build workflow
-│       └── slash-commands.yml        # Slash command handler
-├── build-container/
-│   ├── Dockerfile                    # Build environment
-│   └── entrypoint.sh                 # Build script
-├── packages/                         # Git submodules
-│   ├── niri/
-│   ├── valent/
-│   └── ...
-├── src/
-│   ├── main.rs                       # CLI interface
-│   ├── git.rs                        # Git operations
-│   ├── package.rs                    # Package discovery
-│   └── pkgbuild.rs                   # PKGBUILD parsing
-├── tests/
-│   └── integration_tests.rs          # Integration tests
-├── docs/
-│   └── SLASH_COMMANDS.md             # Slash command docs
-├── Cargo.toml                        # Dependencies
-├── README.md                         # This file
-├── MIGRATION.md                      # Migration guide
-└── ARCHITECTURE.md                   # Technical details
+./target/release/syspac detect-changes --all --paths
+# Output: packages/connman-resolvd packages/ly packages/niri packages/valent
 ```
 
 ## Troubleshooting
@@ -351,6 +374,15 @@ syspac/
 - Ensure workflow downloads existing assets (check logs)
 - Verify "Download existing release assets" step succeeded
 - Check for build failures in specific packages
+
+### Docker can't find packages
+
+**Problem**: "Package directory not found" in Docker logs
+
+**Solution**:
+- Use `--paths` flag: `syspac detect-changes --paths`
+- This returns `packages/niri` instead of just `niri`
+- Docker script expects full paths relative to repo root
 
 ## Contributing
 

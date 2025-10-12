@@ -32,6 +32,10 @@ enum Commands {
         /// Return all packages regardless of changes (for full rebuild)
         #[arg(short, long)]
         all: bool,
+
+        /// Return full paths instead of package names (e.g., "packages/niri" instead of "niri")
+        #[arg(short, long)]
+        paths: bool,
     },
 
     /// List all packages in the repository
@@ -43,6 +47,10 @@ enum Commands {
         /// Show version information from PKGBUILD
         #[arg(short, long)]
         verbose: bool,
+
+        /// Show full paths instead of package names
+        #[arg(short, long)]
+        paths: bool,
     },
 
     /// Get package version from PKGBUILD
@@ -61,22 +69,41 @@ fn main() -> Result<()> {
             base_ref,
             format,
             all,
+            paths,
         } => {
-            let changes = if all {
+            let packages = if all {
                 // Return all packages
-                let packages = package::find_all_packages(&repo_path)?;
-                packages.iter().map(|p| p.name.clone()).collect()
+                package::find_all_packages(&repo_path)?
             } else {
                 // Return only changed packages
-                git::detect_changed_packages(&repo_path, base_ref.as_deref())?
+                let changed_names = git::detect_changed_packages(&repo_path, base_ref.as_deref())?;
+                let all_packages = package::find_all_packages(&repo_path)?;
+
+                // Filter packages to only those that changed
+                all_packages
+                    .into_iter()
+                    .filter(|p| changed_names.contains(&p.name))
+                    .collect()
             };
+
+            // Extract either names or paths
+            let output: Vec<String> = packages
+                .iter()
+                .map(|p| {
+                    if paths {
+                        p.path.clone()
+                    } else {
+                        p.name.clone()
+                    }
+                })
+                .collect();
 
             match format.as_str() {
                 "json" => {
-                    println!("{}", serde_json::to_string_pretty(&changes)?);
+                    println!("{}", serde_json::to_string_pretty(&output)?);
                 }
                 "space" => {
-                    println!("{}", changes.join(" "));
+                    println!("{}", output.join(" "));
                 }
                 _ => {
                     anyhow::bail!("Unknown format: {}", format);
@@ -84,18 +111,24 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::ListPackages { repo_path, verbose } => {
+        Commands::ListPackages {
+            repo_path,
+            verbose,
+            paths,
+        } => {
             let packages = package::find_all_packages(&repo_path)?;
 
             for pkg in packages {
+                let identifier = if paths { &pkg.path } else { &pkg.name };
+
                 if verbose {
                     if let Ok(version) = pkgbuild::parse_version(&pkg.pkgbuild_path) {
-                        println!("{}: {}", pkg.name, version);
+                        println!("{}: {}", identifier, version);
                     } else {
-                        println!("{}: <version unknown>", pkg.name);
+                        println!("{}: <version unknown>", identifier);
                     }
                 } else {
-                    println!("{}", pkg.name);
+                    println!("{}", identifier);
                 }
             }
         }
