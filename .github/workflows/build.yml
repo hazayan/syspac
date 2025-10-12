@@ -70,7 +70,6 @@ jobs:
     outputs:
       packages: ${{ steps.changes.outputs.packages }}
 
-
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -140,6 +139,30 @@ jobs:
             -v ${{ github.workspace }}/repo:/repo \
             package-builder
 
+      - name: Create release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          Built packages in this update: ${{ needs.preflight.outputs.packages }}
+
+          ## Usage
+
+          Add this repository to your `/etc/pacman.conf`:
+
+          ```ini
+          [syspac]
+          SigLevel = Optional TrustAll
+          Server = https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
+          ```
+
+          Then run:
+          ```bash
+          sudo pacman -Sy
+          sudo pacman -S <package-name>
+          ```
+          EOF
+
       - name: Update Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -166,29 +189,7 @@ jobs:
           echo "Creating new release with all packages..."
           gh release create ${{ env.RELEASE_TAG }} \
             --title "Package Repository" \
-            --notes "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-Built packages in this update: ${{ needs.preflight.outputs.packages }}
-
-All available packages:
-$(cd repo/x86_64 && ls -1 *.pkg.tar.zst 2>/dev/null | sed 's/\.pkg\.tar\.zst$//' || echo 'None')
-
-## Usage
-
-Add this repository to your \`/etc/pacman.conf\`:
-
-\`\`\`ini
-[syspac]
-SigLevel = Optional TrustAll
-Server = https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
-\`\`\`
-
-Then run:
-\`\`\`bash
-sudo pacman -Sy
-sudo pacman -S <package-name>
-\`\`\`
-" \
+            --notes-file release-notes.md \
             repo/x86_64/*
 
           # Force update tag
