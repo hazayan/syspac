@@ -4,3 +4,9 @@
 [submodule "ly"]
 	path = ly
 	url = git@github.com:ylabidi/pkg-ly.git
+[submodule "niri"]
+	path = niri
+	url = git@github.com:hazayan/pkg-niri.git
+[submodule "connman-resolvd"]
+	path = connman-resolvd
+	url = git@github.com:hazayan/pkg-connman-resolvd.git

@@ -83,7 +83,8 @@ jobs:
           done
 
           # Convert array to space-separated string
-          FINAL_CHANGES=$(IFS=' '; echo "${CHANGED_PKGS[*]}")
+          IFS=" " read -r -a UNIQUE_CHANGES <<< "$(tr ' ' '\n' <<< "${CHANGED_PKGS[@]}" | sort -u | tr '\n' ' ')"
+          FINAL_CHANGES=$(IFS=' '; echo "${UNIQUE_CHANGES[*]}")
 
           # Output results
           echo "Changed packages to build: $FINAL_CHANGES"
