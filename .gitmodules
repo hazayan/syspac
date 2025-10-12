@@ -1,12 +1,12 @@
 [submodule "valent"]
-	path = valent
+	path = packages/valent
 	url = git@github.com:ylabidi/aur-valent.git
 [submodule "ly"]
-	path = ly
+	path = packages/ly
 	url = git@github.com:ylabidi/pkg-ly.git
 [submodule "niri"]
-	path = niri
+	path = packages/niri
 	url = git@github.com:hazayan/pkg-niri.git
 [submodule "connman-resolvd"]
-	path = connman-resolvd
+	path = packages/connman-resolvd
 	url = git@github.com:hazayan/pkg-connman-resolvd.git
