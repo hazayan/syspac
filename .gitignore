@@ -1,2 +1,26 @@
-.idea
-target
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.so
+*.a
+
+# Package build artifacts
+/repo/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+build-output.txt
+*-build.log

@@ -1,4 +1,4 @@
-name: Build and Update Repository
+name: Build and Update Repository (Rust)
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
     paths-ignore:
       - "**.md"
       - "LICENSE"
+  repository_dispatch:
+    types: [rebuild-all]
 
 env:
   RELEASE_TAG: repository
@@ -21,81 +23,49 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build syspac tool
+        run: cargo build --release
+
       - name: Detect changed packages
         id: changes
         run: |
-          # Function to get base ref for comparison
-          get_base_ref() {
-            # For push events, use the parent of the current commit
-            git rev-parse HEAD^
-          }
+          # Check if this is a rebuild-all command
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]] && [[ "${{ github.event.action }}" == "rebuild-all" ]]; then
+            echo "🔨 Rebuild all packages requested"
+            CHANGED=$(./target/release/syspac detect-changes --all)
+          else
+            echo "🔍 Detecting changed packages"
+            CHANGED=$(./target/release/syspac detect-changes)
+          fi
 
-          # Function to get package version from PKGBUILD
-          get_pkg_version() {
-            local pkgbuild="$1"
-            if [ -f "$pkgbuild" ]; then
-              # Source PKGBUILD in a subshell to get version safely
-              (source "$pkgbuild" 2>/dev/null && echo "${pkgver}-${pkgrel}") || echo "unknown"
-            else
-              echo "unknown"
-            fi
-          }
+          echo "Changed packages to build: $CHANGED"
+          echo "packages=${CHANGED}" >> $GITHUB_OUTPUT
 
-          # Get base ref for comparison
-          BASE_REF=$(get_base_ref) || BASE_REF=""
+          # Also get JSON output for debugging
+          echo "JSON output:"
+          ./target/release/syspac detect-changes --format json
 
-          # Get list of all package directories
-          mapfile -t ALL_PKGS < <(
-            # List submodules with PKGBUILD
-            git submodule foreach --quiet 'if [ -f "PKGBUILD" ]; then echo "$name"; fi'
-            # List direct directories with PKGBUILD
-            find . -maxdepth 2 -name PKGBUILD -exec dirname {} \; | while read -r dir; do
-              dir=${dir#./}
-              if [ -d "$dir" ] && [ ! -d "$dir/.git" ]; then
-                echo "$dir"
-              fi
-            done | sort -u
-          )
-
-          # Initialize arrays for changed and unchanged packages
-          CHANGED_PKGS=()
-          UNCHANGED_PKGS=()
-
-          echo "Checking for package changes..."
-          for pkg in "${ALL_PKGS[@]}"; do
-            if [ -z "$BASE_REF" ]; then
-              # If no base ref (first push), consider package as changed
-              echo "First push or base not available - will build $pkg"
-              CHANGED_PKGS+=("$pkg")
-              continue
-            fi
-
-            # Check if package files changed
-            if git diff --quiet "$BASE_REF" -- "$pkg"; then
-              if [ -f "$pkg/PKGBUILD" ]; then
-                echo "$pkg: No changes detected, skipping"
-                UNCHANGED_PKGS+=("$pkg")
-              fi
-            else
-              echo "$pkg: Changes detected, will rebuild"
-              CHANGED_PKGS+=("$pkg")
-            fi
-          done
-
-          # Convert array to space-separated string
-          IFS=" " read -r -a UNIQUE_CHANGES <<< "$(tr ' ' '\n' <<< "${CHANGED_PKGS[@]}" | sort -u | tr '\n' ' ')"
-          FINAL_CHANGES=$(IFS=' '; echo "${UNIQUE_CHANGES[*]}")
-
-          # Output results
-          echo "Changed packages to build: $FINAL_CHANGES"
-          echo "packages=${FINAL_CHANGES}" >> $GITHUB_OUTPUT
-
-          # Debug information
-          echo "Debug information:"
-          echo "Base ref: $BASE_REF"
-          echo "Total packages found: ${#ALL_PKGS[@]}"
-          echo "Packages to build: ${#CHANGED_PKGS[@]}"
-          echo "Packages skipped: ${#UNCHANGED_PKGS[@]}"
+      - name: List all packages (debug)
+        run: |
+          echo "All packages in repository:"
+          ./target/release/syspac list-packages --verbose
 
     outputs:
       packages: ${{ steps.changes.outputs.packages }}
@@ -126,6 +96,29 @@ jobs:
         run: |
           mkdir -p repo/x86_64
 
+      - name: Download existing release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📦 Downloading existing packages from release..."
+
+          # Check if release exists
+          if gh release view ${{ env.RELEASE_TAG }} >/dev/null 2>&1; then
+            echo "Release exists, downloading existing assets..."
+
+            # Download all existing assets to preserve them
+            cd repo/x86_64
+            gh release download ${{ env.RELEASE_TAG }} --pattern "*.pkg.tar.zst*" || echo "No packages to download"
+            gh release download ${{ env.RELEASE_TAG }} --pattern "syspac.db*" || echo "No database to download"
+            gh release download ${{ env.RELEASE_TAG }} --pattern "syspac.files*" || echo "No files database to download"
+            cd ../..
+
+            echo "Downloaded existing assets:"
+            ls -lh repo/x86_64/ || echo "Directory is empty"
+          else
+            echo "No existing release found, starting fresh"
+          fi
+
       - name: Build builder image
         run: |
           docker build -t package-builder build-container/
@@ -151,23 +144,55 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "📤 Updating release with all packages (old + new)..."
+
           # Ensure the directory has at least one file
           if [ ! "$(ls -A repo/x86_64)" ]; then
+            echo "⚠️  No packages found, creating placeholder"
             echo "This directory is reserved for x86_64 packages" > "repo/x86_64/README.txt"
           fi
 
+          # List what we're about to upload
+          echo "Files to upload:"
+          ls -lh repo/x86_64/
+
           # Delete existing release and tag
+          echo "Deleting old release..."
           gh release delete ${{ env.RELEASE_TAG }} --yes || true
           git tag -d ${{ env.RELEASE_TAG }} || true
           git push origin :refs/tags/${{ env.RELEASE_TAG }} || true
 
-          # Create new release
+          # Create new release with ALL packages (old + new)
+          echo "Creating new release with all packages..."
           gh release create ${{ env.RELEASE_TAG }} \
             --title "Package Repository" \
-            --notes "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            --notes "Last updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+Built packages in this update: ${{ needs.preflight.outputs.packages }}
+
+All available packages:
+$(cd repo/x86_64 && ls -1 *.pkg.tar.zst 2>/dev/null | sed 's/\.pkg\.tar\.zst$//' || echo 'None')
+
+## Usage
+
+Add this repository to your \`/etc/pacman.conf\`:
+
+\`\`\`ini
+[syspac]
+SigLevel = Optional TrustAll
+Server = https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
+\`\`\`
+
+Then run:
+\`\`\`bash
+sudo pacman -Sy
+sudo pacman -S <package-name>
+\`\`\`
+" \
             repo/x86_64/*
 
           # Force update tag
           git tag -f ${{ env.RELEASE_TAG }}
           git push -f origin ${{ env.RELEASE_TAG }}
 
+          echo "✅ Release updated successfully"
