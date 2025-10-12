@@ -49,10 +49,10 @@ jobs:
           # Check if this is a rebuild-all command
           if [[ "${{ github.event_name }}" == "repository_dispatch" ]] && [[ "${{ github.event.action }}" == "rebuild-all" ]]; then
             echo "🔨 Rebuild all packages requested"
-            CHANGED=$(./target/release/syspac detect-changes --all)
+            CHANGED=$(./target/release/syspac detect-changes --all --paths)
           else
             echo "🔍 Detecting changed packages"
-            CHANGED=$(./target/release/syspac detect-changes)
+            CHANGED=$(./target/release/syspac detect-changes --paths)
           fi
 
           echo "Changed packages to build: $CHANGED"
@@ -60,7 +60,7 @@ jobs:
 
           # Also get JSON output for debugging
           echo "JSON output:"
-          ./target/release/syspac detect-changes --format json
+          ./target/release/syspac detect-changes --paths --format json
 
       - name: List all packages (debug)
         run: |
@@ -187,10 +187,20 @@ jobs:
 
           # Create new release with ALL packages (old + new)
           echo "Creating new release with all packages..."
-          gh release create ${{ env.RELEASE_TAG }} \
-            --title "Package Repository" \
-            --notes-file release-notes.md \
-            repo/x86_64/*
+
+          # Only upload actual package files, not empty database files
+          if ls repo/x86_64/*.pkg.tar.zst 1> /dev/null 2>&1; then
+            gh release create ${{ env.RELEASE_TAG }} \
+              --title "Package Repository" \
+              --notes-file release-notes.md \
+              repo/x86_64/*.pkg.tar.zst* repo/x86_64/syspac.{db,files}{,.tar.gz}
+          else
+            echo "⚠️  No packages built, creating release with database only"
+            gh release create ${{ env.RELEASE_TAG }} \
+              --title "Package Repository" \
+              --notes-file release-notes.md \
+              repo/x86_64/syspac.{db,files}{,.tar.gz}
+          fi
 
           # Force update tag
           git tag -f ${{ env.RELEASE_TAG }}
