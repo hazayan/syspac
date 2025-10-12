@@ -1,0 +1,127 @@
+name: Slash Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  rebuild-all:
+    # Only run on PR comments and if the comment is /rebuild-all
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/rebuild-all') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Add reaction to comment
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          comment-id: ${{ github.event.comment.id }}
+          reactions: rocket
+
+      - name: Get PR branch
+        id: pr
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('ref', pr.data.head.ref);
+            core.setOutput('sha', pr.data.head.sha);
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+
+      - name: Build syspac tool
+        run: cargo build --release
+
+      - name: Get all packages
+        id: packages
+        run: |
+          ALL_PACKAGES=$(./target/release/syspac detect-changes --all)
+          echo "packages=${ALL_PACKAGES}" >> $GITHUB_OUTPUT
+          echo "Will rebuild all packages: ${ALL_PACKAGES}"
+
+      - name: Comment with rebuild list
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            🔨 **Rebuild All Packages Triggered**
+
+            Rebuilding all packages: `${{ steps.packages.outputs.packages }}`
+
+            Watch the progress: [Build Workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+      - name: Trigger full rebuild via repository dispatch
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: rebuild-all
+          client-payload: |
+            {
+              "ref": "${{ steps.pr.outputs.ref }}",
+              "sha": "${{ steps.pr.outputs.sha }}",
+              "packages": "${{ steps.packages.outputs.packages }}"
+            }
+
+  rebuild-all-on-main:
+    # Allow /rebuild-all on issues (not just PRs) for maintainers
+    if: |
+      !github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/rebuild-all') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER')
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Add reaction to comment
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          comment-id: ${{ github.event.comment.id }}
+          reactions: rocket
+
+      - name: Comment on issue
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            🔨 **Full Repository Rebuild Triggered**
+
+            Rebuilding all packages on main branch.
+
+            Watch the progress: [Build Workflow](https://github.com/${{ github.repository }}/actions)
+
+      - name: Trigger full rebuild via repository dispatch
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: rebuild-all
+          client-payload: |
+            {
+              "ref": "main",
+              "triggered_by": "${{ github.event.comment.user.login }}"
+            }
