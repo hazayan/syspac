@@ -1,0 +1,136 @@
+name: 'Setup Syspac'
+description: 'Downloads or builds the syspac package management tool'
+author: 'hazayan'
+
+branding:
+  icon: 'package'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version of syspac to use (default: latest release, or "build" to compile from source)'
+    required: false
+    default: 'latest'
+
+  github-token:
+    description: 'GitHub token for downloading releases'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  syspac-path:
+    description: 'Path to the syspac binary'
+    value: ${{ steps.setup.outputs.syspac-path }}
+
+  syspac-version:
+    description: 'Version of syspac that was installed'
+    value: ${{ steps.setup.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup syspac
+      id: setup
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        VERSION="${{ inputs.version }}"
+
+        # If version is "build", compile from source
+        if [[ "$VERSION" == "build" ]]; then
+          echo "🔨 Building syspac from source..."
+
+          # Check if we're in the syspac repo or need to clone
+          if [[ ! -f "Cargo.toml" ]] || ! grep -q "name = \"syspac\"" Cargo.toml 2>/dev/null; then
+            echo "Not in syspac repository, cannot build from source"
+            exit 1
+          fi
+
+          # Install Rust if needed
+          if ! command -v cargo &> /dev/null; then
+            echo "Installing Rust..."
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source "$HOME/.cargo/env"
+          fi
+
+          # Build
+          cargo build --release
+          SYSPAC_PATH="$(pwd)/target/release/syspac"
+          VERSION="source"
+        else
+          # Determine version to download
+          if [[ "$VERSION" == "latest" ]]; then
+            echo "🔍 Finding latest syspac release..."
+            VERSION=$(gh release list --repo "${{ github.repository }}" --limit 1 | grep -v "repository" | head -1 | awk '{print $1}' || echo "")
+
+            if [[ -z "$VERSION" ]]; then
+              echo "⚠️  No syspac release found, falling back to building from source"
+              VERSION="build"
+            fi
+          fi
+
+          # Download if we have a version
+          if [[ "$VERSION" != "build" ]]; then
+            echo "📦 Downloading syspac $VERSION..."
+
+            # Create directory for syspac
+            mkdir -p "$HOME/.local/bin"
+
+            # Try to download the binary
+            if gh release download "$VERSION" \
+                --repo "${{ github.repository }}" \
+                --pattern "syspac-*-linux-x86_64" \
+                --output "$HOME/.local/bin/syspac" 2>/dev/null; then
+
+              chmod +x "$HOME/.local/bin/syspac"
+              SYSPAC_PATH="$HOME/.local/bin/syspac"
+              echo "✅ Downloaded syspac $VERSION"
+            else
+              echo "⚠️  Failed to download syspac $VERSION, building from source instead"
+              VERSION="build"
+            fi
+          fi
+
+          # Fallback to building if download failed
+          if [[ "$VERSION" == "build" ]]; then
+            echo "🔨 Building syspac from source as fallback..."
+
+            if [[ ! -f "Cargo.toml" ]]; then
+              echo "ERROR: Not in syspac repository and cannot download binary"
+              exit 1
+            fi
+
+            if ! command -v cargo &> /dev/null; then
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              source "$HOME/.cargo/env"
+            fi
+
+            cargo build --release
+            SYSPAC_PATH="$(pwd)/target/release/syspac"
+            VERSION="source"
+          fi
+        fi
+
+        # Verify syspac works
+        if [[ -f "$SYSPAC_PATH" ]]; then
+          echo "✅ Syspac ready at: $SYSPAC_PATH"
+          "$SYSPAC_PATH" --version || echo "syspac (version info not available)"
+
+          # Add to PATH
+          echo "$(dirname "$SYSPAC_PATH")" >> $GITHUB_PATH
+
+          # Set outputs
+          echo "syspac-path=$SYSPAC_PATH" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Failed to set up syspac"
+          exit 1
+        fi
+
+    - name: Cache syspac binary
+      if: inputs.version == 'latest'
+      uses: actions/cache@v3
+      with:
+        path: ~/.local/bin/syspac
+        key: syspac-${{ steps.setup.outputs.version }}-${{ runner.os }}
