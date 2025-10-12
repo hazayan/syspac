@@ -51,7 +51,7 @@ WORKDIR /build
 # Set up build environment variables
 ENV PATH="/usr/bin/vendor_perl:/usr/bin/site_perl:/usr/bin/core_perl:/usr/bin:$PATH" \
     GNUPGHOME="/home/builder/.gnupg" \
-    PACKAGER="Artix Custom Repository <custom@artixlinux.org>" \
+    PACKAGER="Hazayan Continuous Integration <ci@hazayan.dev>" \
     MAKEFLAGS="-j$(nproc)"
 
 # Create GPG directory for builder
