@@ -1,0 +1,201 @@
+name: Release Syspac Tool
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.2.0)'
+        required: true
+        type: string
+
+env:
+  BINARY_NAME: syspac
+
+jobs:
+  build:
+    name: Build Syspac
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: syspac
+            asset_name: syspac-linux-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: syspac
+            asset_name: syspac-linux-x86_64-musl
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Install musl tools (for musl target)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary
+        run: |
+          strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Rename binary
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            # Generate version from Cargo.toml and commit
+            CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            VERSION="v${CARGO_VERSION}-${SHORT_SHA}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          cat > release-notes.md <<EOF
+          # Syspac ${{ steps.version.outputs.version }}
+
+          Pre-built binaries for the syspac package management tool.
+
+          ## Usage with GitHub Actions
+
+          \`\`\`yaml
+          - uses: hazayan/syspac@main
+            with:
+              version: ${{ steps.version.outputs.version }}
+
+          - run: syspac detect-changes --paths
+          \`\`\`
+
+          ## Direct Download
+
+          \`\`\`bash
+          # Standard glibc version (recommended)
+          curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/syspac-linux-x86_64 -o syspac
+          chmod +x syspac
+
+          # Static musl version (no dependencies)
+          curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/syspac-linux-x86_64-musl -o syspac
+          chmod +x syspac
+          \`\`\`
+
+          ## What's Changed
+
+          - Built from commit: \`${{ github.sha }}\`
+          - Build date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          EOF
+
+      - name: Check if release exists
+        id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Delete existing release
+        if: steps.check_release.outputs.exists == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "${{ steps.version.outputs.version }}" --yes
+          git push origin ":refs/tags/${{ steps.version.outputs.version }}" || true
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Flatten artifacts directory
+          find artifacts -type f -exec mv {} . \;
+
+          # Create release
+          gh release create "${{ steps.version.outputs.version }}" \
+            --title "Syspac ${{ steps.version.outputs.version }}" \
+            --notes-file release-notes.md \
+            syspac-linux-x86_64* \
+            || echo "Release creation failed, but continuing..."
+
+      - name: Summary
+        run: |
+          echo "## 🎉 Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Binaries**: syspac-linux-x86_64, syspac-linux-x86_64-musl" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Use in GitHub Actions" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+          echo "- uses: ${{ github.repository }}@main" >> $GITHUB_STEP_SUMMARY
+          echo "  with:" >> $GITHUB_STEP_SUMMARY
+          echo "    version: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

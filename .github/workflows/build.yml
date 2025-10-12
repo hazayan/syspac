@@ -23,25 +23,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+      - name: Setup Syspac Tool
+        uses: ./
         with:
-          profile: minimal
-          toolchain: stable
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build syspac tool
-        run: cargo build --release
+          version: latest
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Detect changed packages
         id: changes
@@ -49,10 +35,10 @@ jobs:
           # Check if this is a rebuild-all command
           if [[ "${{ github.event_name }}" == "repository_dispatch" ]] && [[ "${{ github.event.action }}" == "rebuild-all" ]]; then
             echo "🔨 Rebuild all packages requested"
-            CHANGED=$(./target/release/syspac detect-changes --all --paths)
+            CHANGED=$(syspac detect-changes --all --paths)
           else
             echo "🔍 Detecting changed packages"
-            CHANGED=$(./target/release/syspac detect-changes --paths)
+            CHANGED=$(syspac detect-changes --paths)
           fi
 
           echo "Changed packages to build: $CHANGED"
@@ -60,12 +46,12 @@ jobs:
 
           # Also get JSON output for debugging
           echo "JSON output:"
-          ./target/release/syspac detect-changes --paths --format json
+          syspac detect-changes --paths --format json
 
       - name: List all packages (debug)
         run: |
           echo "All packages in repository:"
-          ./target/release/syspac list-packages --verbose
+          syspac list-packages --verbose
 
     outputs:
       packages: ${{ steps.changes.outputs.packages }}
