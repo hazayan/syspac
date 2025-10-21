@@ -10,3 +10,6 @@
 [submodule "connman-resolvd"]
 	path = packages/connman-resolvd
 	url = git@github.com:hazayan/pkg-connman-resolvd.git
+[submodule "packages/meli"]
+	path = packages/meli
+	url = git@github.com:hazayan/pkg-meli.git
