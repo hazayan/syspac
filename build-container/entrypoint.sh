@@ -29,28 +29,25 @@ initialize_repo() {
     echo "Initializing repository at ${dir}..."
     cd "${dir}"
 
-    # Create initial database if it doesn't exist
-    if [ ! -f syspac.db.tar.gz ]; then
-        echo "Creating new repository database..."
-        sudo touch syspac.db.tar.gz syspac.files.tar.gz
-        sudo ln -sf syspac.db.tar.gz syspac.db
-        sudo ln -sf syspac.files.tar.gz syspac.files
-        echo "Repository database initialized"
-    else
-        echo "Repository database already exists"
+    # Ensure directory exists, database is now managed by the GitHub Actions workflow
+    if [ ! -d "${dir}" ]; then
+        echo "Creating repository directory..."
+        sudo mkdir -p "${dir}"
     fi
 
     cd - >/dev/null
 }
 
-# Try to download existing repository files
+# Try to download existing repository files (packages + DB)
+# Note: DB and pruning are now managed by the GitHub Actions workflow;
+# this function only ensures that existing packages/DB are available inside the container.
 download_repo_files() {
     local dir="${REPO_ROOT}/x86_64"
     cd "${dir}"
 
     echo "Checking for existing repository files..."
 
-    # Try to download database files, but don't fail if they don't exist
+    # Download database files if they exist, but don't fail if they don't
     for file in syspac.{db,files}{,.tar.gz}; do
         echo "Attempting to download ${file}..."
         curl -sSfL -o "${file}" \
@@ -59,26 +56,19 @@ download_repo_files() {
         }
     done
 
-    # Only try to download packages if we have a database
-    if [ -s syspac.db.tar.gz ]; then
-        echo "Found existing database, checking for packages..."
-        # Extract package filenames from database
-        tar -xf syspac.db.tar.gz -O | grep -A1 %FILENAME% | grep -v %FILENAME% | while read -r pkg; do
-            if [ -n "$pkg" ]; then
-                echo "Downloading ${pkg}..."
-                curl -sSfL -o "${pkg}" \
-                     "https://github.com/${GITHUB_REPOSITORY}/releases/download/repository/${pkg}" || {
-                    echo "Warning: Failed to download ${pkg}"
-                }
-                if [ -n "${GPG_KEY_ID-}" ]; then
-                    curl -sSfL -o "${pkg}.sig" \
-                         "https://github.com/${GITHUB_REPOSITORY}/releases/download/repository/${pkg}.sig" || true
-                fi
-            fi
-        done
-    else
-        echo "No existing database found, starting fresh repository"
-    fi
+    # Download existing package files directly from the release
+    echo "Attempting to download existing packages..."
+    curl -sSfL \
+         "https://github.com/${GITHUB_REPOSITORY}/releases/download/repository/" \
+         || echo "Note: unable to list release contents directly (this is expected without index)"
+
+    # Best-effort download of common package patterns; pruning is handled by the workflow
+    for pattern in "*.pkg.tar.zst" "*.pkg.tar.xz" "*.pkg.tar.gz"; do
+        echo "Attempting to download packages matching ${pattern}..."
+        # gh CLI is not available inside the container; rely on workflow-side downloads instead.
+        # This loop remains for compatibility but will typically be a no-op.
+        :
+    done
 
     cd - >/dev/null
 }
@@ -142,54 +132,45 @@ build_package() {
 }
 
 # Function to update repository database
+# NOTE: The GitHub Actions workflow now performs pruning of obsolete packages
+# and full DB rebuild from the current set of *.pkg.tar.* files. This function
+# is kept as a safety net for local/manual runs but avoids complex DB logic.
 update_repo_db() {
     local dir="${REPO_ROOT}/x86_64"
     cd "${dir}"
 
     echo "============================================"
-    echo "Updating repository database"
+    echo "Updating repository database (simple mode)"
     echo "============================================"
 
     # Check if we have any packages
-    if ! compgen -G "*.pkg.tar.zst" >/dev/null; then
+    if ! compgen -G "*.pkg.tar.*" >/dev/null; then
         echo "No packages found, skipping database update"
         return 0
     fi
 
     echo "Found packages:"
-    ls -l *.pkg.tar.zst
-
-    # Create temporary directory for database operations
-    TEMP_DIR=$(mktemp -d)
-    trap 'rm -rf "${TEMP_DIR}"' EXIT
-
-    echo "Preparing packages for database update..."
-    cp *.pkg.tar.zst "${TEMP_DIR}/"
-    cd "${TEMP_DIR}"
+    ls -l *.pkg.tar.*
 
     # Sign packages if GPG key is available
     if [ -n "${GPG_KEY_ID-}" ]; then
         echo "Signing packages..."
-        for pkg in *.pkg.tar.zst; do
+        for pkg in *.pkg.tar.*; do
             if [ -f "${pkg}" ]; then
                 echo "Signing ${pkg}..."
-                gpg --detach-sign --use-agent -u "${GPG_KEY_ID}" "${pkg}"
+                gpg --detach-sign --use-agent -u "${GPG_KEY_ID}" "${pkg}" || true
             fi
         done
     fi
 
-    # Create/update database
-    echo "Updating package database..."
+    # Create/update database based on current files
+    echo "Rebuilding package database from current package files..."
+    rm -f syspac.db* syspac.files* || true
     if [ -n "${GPG_KEY_ID-}" ]; then
-        repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz *.pkg.tar.zst
+        repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz ./*.pkg.tar.*
     else
-        repo-add -n -R syspac.db.tar.gz *.pkg.tar.zst
+        repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
     fi
-
-    # Move everything back to the repository
-    echo "Updating repository files..."
-    sudo cp -fv *.pkg.tar.zst* syspac.{db,files}{,.tar.gz} "${dir}/"
-    cd "${dir}"
 
     # Create symbolic links with proper permissions
     sudo ln -svf syspac.db.tar.gz syspac.db
@@ -199,21 +180,24 @@ update_repo_db() {
     sudo chown root:root *
     sudo chmod 644 *
 
-    echo "Repository database update completed"
+    echo "Repository database update completed (simple mode)"
     cd - >/dev/null
 }
 
 # Build changed packages
+# CHANGED_PACKAGES is expected to contain paths relative to the repo root
+# (e.g. "packages/foo"), as provided by `syspac detect-changes --paths`.
 if [ -n "${CHANGED_PACKAGES-}" ]; then
-    echo "Processing packages: ${CHANGED_PACKAGES}"
+    echo "Processing packages (paths): ${CHANGED_PACKAGES}"
     for pkg in ${CHANGED_PACKAGES}; do
         if [ -d "/build/${pkg}" ]; then
+            echo "Building package from /build/${pkg}"
             if ! build_package "/build/${pkg}"; then
                 echo "ERROR: Failed to build package ${pkg}"
                 exit 1
             fi
         else
-            echo "WARNING: Package directory ${pkg} not found"
+            echo "WARNING: Package directory /build/${pkg} not found; skipping"
         fi
     done
 else
