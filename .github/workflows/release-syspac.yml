@@ -51,6 +51,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
+      - name: Install system dependencies (OpenSSL, pkg-config, zlib)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libz-dev
+
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
