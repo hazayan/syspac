@@ -13,3 +13,6 @@
 [submodule "packages/paru"]
 	path = packages/paru
 	url = git@github.com:hazayan/pkg-paru.git
+[submodule "packages/zfsbootmenu"]
+	path = packages/zfsbootmenu
+	url = git@github.com:hazayan/pkg-zbm.git
