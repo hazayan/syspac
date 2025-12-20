@@ -1,0 +1,131 @@
+name: Build Syspac Docker Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile.syspac"
+      - "action.yml"
+      - ".github/workflows/release-syspac.yml"
+      - ".github/workflows/build-syspac-image.yml"
+  workflow_dispatch: {}
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/syspac
+
+jobs:
+  build-and-push:
+    name: Build and Push Syspac Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Install system dependencies (OpenSSL, pkg-config, zlib)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libz-dev
+
+      - name: Build syspac binary
+        run: |
+          set -e
+          cargo build --release
+          cp target/release/syspac syspac-linux-x86_64
+          chmod +x syspac-linux-x86_64
+          echo "Built syspac binary at ./syspac-linux-x86_64"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          # Use commit SHA as an immutable tag
+          SHA_TAG=${GITHUB_SHA}
+          echo "sha_tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+          # Optionally use a version-like tag if this run is from a tag
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION_TAG="${GITHUB_REF_NAME}"
+          else
+            VERSION_TAG=""
+          fi
+          echo "version_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        run: |
+          set -e
+
+          IMAGE="${IMAGE_NAME}"
+          SHA_TAG="${{ steps.meta.outputs.sha_tag }}"
+          VERSION_TAG="${{ steps.meta.outputs.version_tag }}"
+
+          echo "Building image ${IMAGE}:${SHA_TAG}"
+          docker build -f Dockerfile.syspac -t "${IMAGE}:${SHA_TAG}" .
+
+          # Always tag latest from main
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            docker tag "${IMAGE}:${SHA_TAG}" "${IMAGE}:latest"
+          fi
+
+          # Optionally tag with version if this is a tag build
+          if [[ -n "${VERSION_TAG}" ]]; then
+            docker tag "${IMAGE}:${SHA_TAG}" "${IMAGE}:${VERSION_TAG}"
+          fi
+
+          echo "Pushing ${IMAGE}:${SHA_TAG}"
+          docker push "${IMAGE}:${SHA_TAG}"
+
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            echo "Pushing ${IMAGE}:latest"
+            docker push "${IMAGE}:latest"
+          fi
+
+          if [[ -n "${VERSION_TAG}" ]]; then
+            echo "Pushing ${IMAGE}:${VERSION_TAG}"
+            docker push "${IMAGE}:${VERSION_TAG}"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## 🐳 Syspac Docker Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**SHA Tag:** \`${{ steps.meta.outputs.sha_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            echo "**Also tagged:** \`latest\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ -n "${{ steps.meta.outputs.version_tag }}" ]]; then
+            echo "**Version Tag:** \`${{ steps.meta.outputs.version_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "You can use this image in workflows as:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+          echo "jobs:" >> $GITHUB_STEP_SUMMARY
+          echo "  example:" >> $GITHUB_STEP_SUMMARY
+          echo "    runs-on: ubuntu-latest" >> $GITHUB_STEP_SUMMARY
+          echo "    container:" >> $GITHUB_STEP_SUMMARY
+          echo "      image: ${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "    steps:" >> $GITHUB_STEP_SUMMARY
+          echo "      - uses: actions/checkout@v4" >> $GITHUB_STEP_SUMMARY
+          echo "      - run: syspac detect-changes --paths" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

@@ -16,18 +16,14 @@ env:
 jobs:
   preflight:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/syspac:latest
     steps:
       - name: Checkout code with submodules
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           submodules: recursive
-
-      - name: Setup Syspac Tool
-        uses: ./
-        with:
-          version: latest
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Detect changed packages
         id: changes

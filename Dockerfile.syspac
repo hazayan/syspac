@@ -1,0 +1,31 @@
+FROM debian:stable-slim
+
+# Minimal runtime image for syspac
+# - Includes git for repository operations
+# - Includes ca-certificates for TLS
+# - Does NOT include build toolchains (only for running syspac)
+
+LABEL org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY:-unknown}/syspac"
+LABEL org.opencontainers.image.description="Syspac - Artix/Arch package repository management tool"
+LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# The build workflow is expected to:
+# 1. Build the syspac binary
+# 2. Copy it into the build context as ./syspac-linux-x86_64
+#
+# We then just drop it into /usr/local/bin as "syspac".
+COPY syspac-linux-x86_64 /usr/local/bin/syspac
+
+RUN chmod +x /usr/local/bin/syspac
+
+WORKDIR /work
+
+ENTRYPOINT ["syspac"]
+CMD ["--help"]
