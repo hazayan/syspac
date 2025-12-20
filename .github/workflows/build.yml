@@ -19,6 +19,7 @@ jobs:
     container:
       image: ghcr.io/${{ github.repository_owner }}/syspac:latest
     steps:
+
       - name: Checkout code with submodules
         uses: actions/checkout@v3
         with:
@@ -26,9 +27,11 @@ jobs:
           submodules: recursive
 
       - name: Fix repository ownership for container user
+        shell: bash
         run: |
-          # syspac (via libgit2) requires the repo to be owned by the current user
-          sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
+          # syspac (via libgit2) requires the repo to be owned by the current user.
+          # The container user should already own the workspace; if not, adjust directly.
+          chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}" || true
 
       - name: Detect changed packages
         id: changes
