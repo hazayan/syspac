@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use git2::{DiffOptions, Oid, Repository};
 use std::collections::HashSet;
-use std::path::Path;
 
-use crate::package::{Package, find_all_packages};
+use crate::package::{find_all_packages, Package};
 
 /// Detects packages that have changed between the base ref and HEAD
 pub fn detect_changed_packages(repo_path: &str, base_ref: Option<&str>) -> Result<Vec<String>> {
@@ -87,9 +86,18 @@ fn find_changed_packages_between_commits(
 
     // Check each delta (changed file) to see which package it belongs to
     for delta in diff.deltas() {
-        if let Some(path) = delta.new_file().path() {
-            let path_str = path.to_string_lossy();
+        // Consider both old and new paths so we correctly detect renames and deletions
+        let mut candidate_paths = Vec::new();
 
+        if let Some(path) = delta.new_file().path() {
+            candidate_paths.push(path.to_string_lossy().to_string());
+        }
+
+        if let Some(path) = delta.old_file().path() {
+            candidate_paths.push(path.to_string_lossy().to_string());
+        }
+
+        for path_str in candidate_paths {
             // Check if this path belongs to any package
             for package in packages {
                 if path_str.starts_with(&package.path) {

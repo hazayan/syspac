@@ -223,3 +223,87 @@ fn test_detect_changes_json_format() {
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
     assert!(parsed.is_ok());
 }
+
+#[test]
+fn test_removed_package_not_reported_as_changed() {
+    let repo = create_test_repo();
+
+    // Create a package under packages/
+    let pkg_dir = repo.path().join("packages").join("to-remove");
+    fs::create_dir_all(&pkg_dir).unwrap();
+    create_pkgbuild(&pkg_dir, "1.0.0", "1");
+
+    // Commit with the package present
+    Command::new("git")
+        .args(&["add", "."])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(&["commit", "-m", "Add removable package"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+
+    // Record this commit as the base ref
+    let base_output = Command::new("git")
+        .args(&["rev-parse", "HEAD"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(base_output.status.success());
+    let base_ref = String::from_utf8(base_output.stdout).unwrap();
+    let base_ref = base_ref.trim();
+
+    // Now remove the package directory and commit the removal
+    fs::remove_dir_all(&pkg_dir).unwrap();
+    Command::new("git")
+        .args(&["add", "-A"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(&["commit", "-m", "Remove package"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+
+    // list-packages at HEAD should *not* include the removed package
+    let list_output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--",
+            "list-packages",
+            "-r",
+            repo.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(list_output.status.success());
+    let list_stdout = String::from_utf8(list_output.stdout).unwrap();
+    assert!(
+        !list_stdout.contains("to-remove"),
+        "removed package should not appear in list-packages output"
+    );
+
+    // detect-changes from the recorded base_ref should *not* report the removed package,
+    // documenting the current limitation that deletions are not surfaced as 'changed'
+    let detect_output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--",
+            "detect-changes",
+            "-r",
+            repo.path().to_str().unwrap(),
+            "--base-ref",
+            base_ref,
+        ])
+        .output()
+        .unwrap();
+    assert!(detect_output.status.success());
+    let detect_stdout = String::from_utf8(detect_output.stdout).unwrap();
+    assert!(
+        !detect_stdout.contains("to-remove"),
+        "removed package should not be reported as changed by detect-changes according to current semantics"
+    );
+}

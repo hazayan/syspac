@@ -104,6 +104,77 @@ jobs:
             echo "No existing release found, starting fresh"
           fi
 
+      - name: List current packages (source of truth)
+        id: current_pkgs
+        run: |
+          CURRENT=$(syspac list-packages)
+          echo "Current packages: ${CURRENT}"
+          echo "current=${CURRENT}" >> $GITHUB_OUTPUT
+
+      - name: Prune packages that no longer exist
+        working-directory: repo/x86_64
+        run: |
+          set -e
+
+          CURRENT="${{ steps.current_pkgs.outputs.current }}"
+
+          echo "Current package set from syspac:"
+          echo "${CURRENT}"
+
+          # If there are no package files yet, nothing to prune
+          shopt -s nullglob
+          PKGFILES=( ./*.pkg.tar.* )
+          if [ ${#PKGFILES[@]} -eq 0 ]; then
+            echo "No existing package files to prune"
+            exit 0
+          fi
+
+          # Convert CURRENT into a newline-separated list for easier matching
+          # shellcheck disable=SC2086
+          printf '%s\n' ${CURRENT} > /tmp/current-packages.txt
+
+          prune_file() {
+            local f="$1"
+            local base="${f##*/}"        # strip path
+            base="${base%%.pkg.tar.*}"   # strip extension
+            # Strip arch (last -separated field), assuming name-ver-rel-arch.pkg.tar.*
+            base="${base%-*-*-*}"
+            echo "$base"
+          }
+
+          for f in ./*.pkg.tar.*; do
+            [ -e "$f" ] || continue
+
+            PKGNAME=$(prune_file "$f")
+
+            if ! grep -qx "$PKGNAME" /tmp/current-packages.txt; then
+              echo "Removing obsolete package file: $f (pkgname=$PKGNAME not in current packages)"
+              rm -f "$f"
+            else
+              echo "Keeping package file: $f (pkgname=$PKGNAME is current)"
+            fi
+          done
+
+      - name: Rebuild pacman database from current packages
+        working-directory: repo/x86_64
+        run: |
+          set -e
+
+          # Remove existing DB files
+          rm -f syspac.db* syspac.files* || true
+
+          shopt -s nullglob
+          PKGFILES=( ./*.pkg.tar.* )
+          if [ ${#PKGFILES[@]} -eq 0 ]; then
+            echo "No package files found; skipping repo-add."
+            exit 0
+          fi
+
+          echo "Rebuilding pacman DB from the following packages:"
+          ls -1 ./*.pkg.tar.*
+
+          repo-add syspac.db.tar.gz ./*.pkg.tar.*
+
       - name: Build builder image
         run: |
           docker build -t package-builder build-container/
@@ -153,7 +224,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "📤 Updating release with all packages (old + new)..."
+          echo "📤 Updating release with all packages (old + new, pruned to current set)..."
 
           # Ensure the directory has at least one file
           if [ ! "$(ls -A repo/x86_64)" ]; then
@@ -171,15 +242,14 @@ jobs:
           git tag -d ${{ env.RELEASE_TAG }} || true
           git push origin :refs/tags/${{ env.RELEASE_TAG }} || true
 
-          # Create new release with ALL packages (old + new)
-          echo "Creating new release with all packages..."
+          # Create new release with ALL current packages and DB
+          echo "Creating new release with all current packages..."
 
-          # Only upload actual package files, not empty database files
-          if ls repo/x86_64/*.pkg.tar.zst 1> /dev/null 2>&1; then
+          if ls repo/x86_64/*.pkg.tar.* 1> /dev/null 2>&1; then
             gh release create ${{ env.RELEASE_TAG }} \
               --title "Package Repository" \
               --notes-file release-notes.md \
-              repo/x86_64/*.pkg.tar.zst* repo/x86_64/syspac.{db,files}{,.tar.gz}
+              repo/x86_64/*.pkg.tar.* repo/x86_64/syspac.{db,files}{,.tar.gz}
           else
             echo "⚠️  No packages built, creating release with database only"
             gh release create ${{ env.RELEASE_TAG }} \

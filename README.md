@@ -140,6 +140,18 @@ src/
    - Maps changed files to their parent packages
    - Returns sorted list of unique changed packages
 
+   **Important limitations:**
+   - Only **currently existing packages** (those that have a PKGBUILD in the working tree at HEAD) are considered.
+   - If a package is completely removed (e.g. submodule unlinked and/or its directory with PKGBUILD deleted), it:
+     - Will no longer appear in `list-packages`
+     - Will **not** be reported by `detect-changes` as a “changed” package, because there is no current package to map the deleted paths to.
+   - Workflows that need to handle removed packages must compare:
+     - The current package set: `syspac list-packages`
+     - Against the packages present in the binary repo / database
+     and explicitly prune extra entries.
+
+   The diff logic considers both old and new paths for each changed file so that renames and moves between packages are detected as changes for the relevant packages, as long as those packages still exist at HEAD.
+
 3. **PKGBUILD Parsing** (`pkgbuild.rs`):
    - Primary method: Sources PKGBUILD with bash (most reliable)
    - Fallback: Simple regex-based parser (for cases without bash)
@@ -200,6 +212,48 @@ This ensures that:
 - Users can always access all packages
 
 See `.github/workflows/build.yml` for the complete workflow.
+
+### Handling Deleted Packages in Workflows
+
+Because `syspac detect-changes` only reports **existing** packages whose files changed, it will not directly tell you when a package has been removed from the repository. To avoid “dangling” packages that remain in the binary repo or database even after their source package is removed:
+
+1. Use `list-packages` as the source of truth for current packages:
+
+   ```bash
+   # Get current package names (or paths)
+   CURRENT_PACKAGES=$(syspac list-packages)
+   ```
+
+2. When (re)generating the pacman repository:
+
+   - Do **not** rely on the existing database as a base for future updates.
+   - Instead, reconstruct the database from the set of package files you actually want to keep.
+
+   A typical pattern is:
+
+   ```bash
+   # In your workflow, after downloading existing release assets:
+   cd repo/x86_64
+
+   # Optionally, remove package files for packages that no longer exist
+   # by comparing CURRENT_PACKAGES to the set of *.pkg.tar.* files.
+
+   # Rebuild the database from scratch based on the files present
+   rm -f syspac.db* syspac.files*
+   repo-add syspac.db.tar.gz ./*.pkg.tar.*
+   ```
+
+   Any package that has been removed from the source repository and whose package file you have deleted locally will then also be dropped from the database.
+
+3. If you need explicit detection of removed packages:
+
+   - Compare `syspac list-packages` output against the set of package names (or paths) derived from the existing repo or database.
+   - Treat entries present in the repo/DB but missing from `list-packages` as removed, and delete their package files before rebuilding the DB.
+
+This combination ensures that:
+- `detect-changes` drives which existing packages to rebuild.
+- `list-packages` defines the authoritative set of packages that should exist.
+- The pacman repository and database are always consistent with the current `packages/` structure.
 
 ## Slash Commands
 
