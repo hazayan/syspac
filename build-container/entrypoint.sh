@@ -168,7 +168,7 @@ update_repo_db() {
 
     # Create/update database based on current files
     echo "Rebuilding package database from current package files..."
-    rm -f syspac.db* syspac.files* || true
+    rm -f syspac.db* syspac.files* syspac.db.tar.gz.lck || true
     if [ -n "${GPG_KEY_ID-}" ]; then
         repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz ./*.pkg.tar.*
     else
@@ -179,9 +179,10 @@ update_repo_db() {
     sudo ln -svf syspac.db.tar.gz syspac.db
     sudo ln -svf syspac.files.tar.gz syspac.files
 
-    # Ensure correct permissions on all files
-    sudo chown root:root *
-    sudo chmod 644 *
+    # For CI, ownership and permissions are managed by the outer workflow.
+    # Avoid forcing root:root here to prevent permission issues between runs.
+    # sudo chown root:root *
+    # sudo chmod 644 *
 
     echo "Repository database update completed (simple mode)"
     cd - >/dev/null
