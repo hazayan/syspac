@@ -7,9 +7,6 @@
 [submodule "niri"]
 	path = packages/niri
 	url = git@github.com:hazayan/pkg-niri.git
-[submodule "packages/meli"]
-	path = packages/meli
-	url = git@github.com:hazayan/pkg-meli.git
 [submodule "packages/paru"]
 	path = packages/paru
 	url = git@github.com:hazayan/pkg-paru.git
