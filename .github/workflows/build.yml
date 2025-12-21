@@ -274,9 +274,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -e
           echo "📤 Updating release with all packages (old + new, pruned to current set)..."
 
-          # Ensure the directory has at least one file
+          # Ensure the directory has at least one file (for diagnostics / debug)
           if [ ! "$(ls -A repo/x86_64)" ]; then
             echo "⚠️  No packages found, creating placeholder"
             echo "This directory is reserved for x86_64 packages" > "repo/x86_64/README.txt"
@@ -286,27 +287,52 @@ jobs:
           echo "Files to upload:"
           ls -lh repo/x86_64/
 
-          # Delete existing release and tag
-          echo "Deleting old release..."
-          gh release delete ${{ env.RELEASE_TAG }} --yes || true
-          git tag -d ${{ env.RELEASE_TAG }} || true
-          git push origin :refs/tags/${{ env.RELEASE_TAG }} || true
+          # Determine what artifacts actually exist
+          shopt -s nullglob
 
-          # Create new release with ALL current packages and DB
-          echo "Creating new release with all current packages..."
+          PKGFILES=( repo/x86_64/*.pkg.tar.* )
+          DBFILES=( repo/x86_64/syspac.db* repo/x86_64/syspac.files* )
 
-          if ls repo/x86_64/*.pkg.tar.* 1> /dev/null 2>&1; then
-            gh release create ${{ env.RELEASE_TAG }} \
-              --title "Package Repository" \
-              --notes-file release-notes.md \
-              repo/x86_64/*.pkg.tar.* repo/x86_64/syspac.{db,files}{,.tar.gz}
-          else
-            echo "⚠️  No packages built, creating release with database only"
-            gh release create ${{ env.RELEASE_TAG }} \
-              --title "Package Repository" \
-              --notes-file release-notes.md \
-              repo/x86_64/syspac.{db,files}{,.tar.gz}
+          HAS_PKGS=false
+          HAS_DB=false
+
+          if [ ${#PKGFILES[@]} -gt 0 ]; then
+            HAS_PKGS=true
           fi
+
+          if [ ${#DBFILES[@]} -gt 0 ]; then
+            HAS_DB=true
+          fi
+
+          if [ "$HAS_PKGS" = false ] && [ "$HAS_DB" = false ]; then
+            echo "⚠️  No packages or database files found; skipping release update."
+            exit 0
+          fi
+
+          # Delete existing release and tag if they exist
+          echo "Deleting old release (if any)..."
+          gh release delete ${{ env.RELEASE_TAG }} --yes || echo "No existing release to delete"
+          git tag -d ${{ env.RELEASE_TAG }} || echo "No existing tag to delete"
+          git push origin :refs/tags/${{ env.RELEASE_TAG }} || echo "No remote tag to delete"
+
+          # Build argument list for gh release create based on existing files
+          ARGS=( "${{ env.RELEASE_TAG }}" --title "Package Repository" --notes-file release-notes.md )
+
+          if [ "$HAS_PKGS" = true ]; then
+            ARGS+=( repo/x86_64/*.pkg.tar.* )
+          fi
+
+          if [ "$HAS_DB" = true ]; then
+            # Only include DB/files patterns that actually match
+            for f in repo/x86_64/syspac.db* repo/x86_64/syspac.files*; do
+              if [ -e "$f" ]; then
+                ARGS+=( "$f" )
+              fi
+            done
+          fi
+
+          echo "Creating new release with current packages and DB (if any)..."
+          gh release create "${ARGS[@]}"
 
           # Force update tag
           git tag -f ${{ env.RELEASE_TAG }}
