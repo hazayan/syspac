@@ -1,9 +1,6 @@
 [submodule "valent"]
 	path = packages/valent
 	url = git@github.com:ylabidi/aur-valent.git
-[submodule "niri"]
-	path = packages/niri
-	url = git@github.com:hazayan/pkg-niri.git
 [submodule "meli"]
 	path = packages/meli
 	url = git@github.com:hazayan/pkg-meli.git
@@ -16,3 +13,6 @@
 [submodule "ly"]
 	path = packages/ly
 	url = git@github.com:hazayan/pkg-ly.git
+[submodule "niri"]
+	path = packages/niri
+	url = git@github.com:hazayan/pkg-niri.git
