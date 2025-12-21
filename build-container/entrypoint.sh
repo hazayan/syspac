@@ -29,7 +29,7 @@ initialize_repo() {
     echo "Initializing repository at ${dir}..."
     cd "${dir}"
 
-    # Ensure directory exists, database is now managed by the GitHub Actions workflow
+    # Ensure directory exists
     if [ ! -d "${dir}" ]; then
         echo "Creating repository directory..."
         sudo mkdir -p "${dir}"
@@ -38,9 +38,9 @@ initialize_repo() {
     cd - >/dev/null
 }
 
-# Try to download existing repository files (packages + DB)
-# Note: DB and pruning are now managed by the GitHub Actions workflow;
-# this function only ensures that existing packages/DB are available inside the container.
+# Try to download existing repository files (DB + packages) so that unchanged
+# packages can be preserved. Pruning and DB rebuild are now handled entirely
+# by the GitHub Actions workflow.
 download_repo_files() {
     local dir="${REPO_ROOT}/x86_64"
     cd "${dir}"
@@ -59,19 +59,11 @@ download_repo_files() {
         }
     done
 
-    # Download existing package files directly from the release
-    echo "Attempting to download existing packages from tag ${release_tag}..."
+    # Download existing package files directly from the release (best-effort)
+    echo "Attempting to download existing packages from tag ${release_tag} (best-effort)..."
     curl -sSfL \
          "https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/" \
          || echo "Note: unable to list release contents directly (this is expected without index)"
-
-    # Best-effort download of common package patterns; pruning is handled by the workflow
-    for pattern in "*.pkg.tar.zst" "*.pkg.tar.xz" "*.pkg.tar.gz"; do
-        echo "Attempting to download packages matching ${pattern}..."
-        # gh CLI is not available inside the container; rely on workflow-side downloads instead.
-        # This loop remains for compatibility but will typically be a no-op.
-        :
-    done
 
     cd - >/dev/null
 }
@@ -83,7 +75,8 @@ download_repo_files
 # Function to build a package
 build_package() {
     local pkg_dir=$1
-    local pkg_name=$(basename "${pkg_dir}")
+    local pkg_name
+    pkg_name=$(basename "${pkg_dir}")
     local build_log="${REPO_ROOT}/${pkg_name}-build.log"
 
     echo "============================================"
@@ -134,55 +127,6 @@ build_package() {
     cd - >/dev/null
 }
 
-# Function to update repository database
-# NOTE: In CI, the GitHub Actions workflow performs pruning of obsolete packages
-# and a full DB rebuild from the current set of *.pkg.tar.* files. This function
-# is retained only for potential non-CI/manual use.
-update_repo_db() {
-    local dir="${REPO_ROOT}/x86_64"
-    cd "${dir}"
-
-    echo "============================================"
-    echo "Updating repository database (simple mode)"
-    echo "============================================"
-
-    # Check if we have any packages
-    if ! compgen -G "*.pkg.tar.*" >/dev/null; then
-        echo "No packages found, skipping database update"
-        return 0
-    fi
-
-    echo "Found packages:"
-    ls -l *.pkg.tar.*
-
-    # Sign packages if GPG key is available
-    if [ -n "${GPG_KEY_ID-}" ]; then
-        echo "Signing packages..."
-        for pkg in *.pkg.tar.*; do
-            if [ -f "${pkg}" ]; then
-                echo "Signing ${pkg}..."
-                gpg --detach-sign --use-agent -u "${GPG_KEY_ID}" "${pkg}" || true
-            fi
-        done
-    fi
-
-    # Create/update database based on current files
-    echo "Rebuilding package database from current package files..."
-    rm -f syspac.db* syspac.files* syspac.db.tar.gz.lck || true
-    if [ -n "${GPG_KEY_ID-}" ]; then
-        repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz ./*.pkg.tar.*
-    else
-        repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
-    fi
-
-    # Create symbolic links with proper permissions
-    sudo ln -svf syspac.db.tar.gz syspac.db
-    sudo ln -svf syspac.files.tar.gz syspac.files
-
-    echo "Repository database update completed (simple mode)"
-    cd - >/dev/null
-}
-
 # Build changed packages
 # CHANGED_PACKAGES is expected to contain paths relative to the repo root
 # (e.g. "packages/foo"), as provided by `syspac detect-changes --paths`.
@@ -203,15 +147,9 @@ else
     echo "No packages to build"
 fi
 
-# Update repository database
-# In CI, the GitHub Actions workflow performs pruning and a full DB rebuild.
-# Skip the container-side DB update in CI to avoid lock/permission issues and
-# rely solely on the outer workflow for the production repository state.
-if [ "${GITHUB_ACTIONS-}" != "true" ]; then
-    update_repo_db
-else
-    echo "Skipping container-side update_repo_db in CI; outer workflow will rebuild DB."
-fi
+# NOTE: Repository database pruning and full rebuild (including signing) are now
+# handled entirely by the GitHub Actions workflow. The container only builds
+# packages into /repo/x86_64; it does not modify the pacman DB.
 
 echo "============================================"
 echo "Build process completed successfully at $(date)"
