@@ -73,9 +73,11 @@ jobs:
         id: current_pkgs
         shell: bash
         run: |
-          CURRENT=$(syspac list-packages)
+          # Get packages as newline-separated list and join into a single space-separated string
+          mapfile -t pkgs < <(syspac list-packages)
+          CURRENT="${pkgs[*]}"
           echo "Current packages: ${CURRENT}"
-          echo "current=${CURRENT}" >> $GITHUB_OUTPUT
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
 
     outputs:
       packages: ${{ steps.changes.outputs.packages }}
