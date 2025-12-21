@@ -259,15 +259,25 @@ jobs:
               rm -f syspac.db* syspac.files* syspac.db.tar.gz.lck || true
 
               shopt -s nullglob
+              # Collect all package archives (exclude signatures)
               PKGFILES=( ./*.pkg.tar.* )
-              if [ ${#PKGFILES[@]} -eq 0 ]; then
+              PKGONLY=()
+              for f in "${PKGFILES[@]}"; do
+                # Skip signature files
+                if [[ "$f" == *.sig ]]; then
+                  continue
+                fi
+                PKGONLY+=( "$f" )
+              done
+
+              if [ ${#PKGONLY[@]} -eq 0 ]; then
                 echo "No package files found; skipping repo-add in container."
                 exit 0
               fi
 
               echo "Signing packages in container..."
               if [ -n "${GPG_KEY_ID-}" ]; then
-                for pkg in ./*.pkg.tar.*; do
+                for pkg in "${PKGONLY[@]}"; do
                   if [ -f "${pkg}" ]; then
                     echo "Signing ${pkg}..."
                     gpg --detach-sign --batch --yes -u "${GPG_KEY_ID}" "${pkg}" || {
@@ -281,12 +291,12 @@ jobs:
 
               echo "Creating database (signed if key is available) in container..."
               if [ -n "${GPG_KEY_ID-}" ]; then
-                repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz ./*.pkg.tar.* || {
+                repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz "${PKGONLY[@]}" || {
                   echo "repo-add with signing failed; attempting unsigned..."
-                  repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
+                  repo-add -n -R syspac.db.tar.gz "${PKGONLY[@]}"
                 }
               else
-                repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
+                repo-add -n -R syspac.db.tar.gz "${PKGONLY[@]}"
               fi
             '
 
