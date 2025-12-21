@@ -182,6 +182,11 @@ jobs:
             fi
           done
 
+      - name: Import GPG key
+        run: |
+          gpg --import --no-tty <<<"${{ secrets.GPG_KEY }}"
+          gpg --import-ownertrust --no-tty <<<"${{ vars.GPG_KEY_ID }}:5:"
+
       - name: Rebuild and sign pacman database from current packages
         working-directory: repo/x86_64
         env:
@@ -227,11 +232,6 @@ jobs:
       - name: Build builder image
         run: |
           docker build -t package-builder build-container/
-
-      - name: Import GPG key
-        run: |
-          gpg --import --no-tty <<<"${{ secrets.GPG_KEY }}"
-          gpg --import-ownertrust --no-tty <<<"${{ vars.GPG_KEY_ID }}:5:"
 
       - name: Build packages
         run: |
