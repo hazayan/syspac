@@ -2,7 +2,7 @@ name: Build and Update Repository (Rust)
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
     paths-ignore:
       - "**.md"
       - "LICENSE"
@@ -10,7 +10,7 @@ on:
     types: [rebuild-all]
 
 env:
-  RELEASE_TAG: repository
+  RELEASE_TAG: repo
   REPO_NAME: syspac
 
 jobs:
@@ -216,6 +216,7 @@ jobs:
           docker run --rm \
             --privileged \
             -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e RELEASE_TAG="${{ env.RELEASE_TAG }}" \
             -e CHANGED_PACKAGES="${{ needs.preflight.outputs.packages }}" \
             -e GPG_KEY_DATA="${{ secrets.GPG_KEY }}" \
             -e GPG_KEY_ID="${{ vars.GPG_KEY_ID }}" \
