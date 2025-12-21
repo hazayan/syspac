@@ -19,12 +19,22 @@ jobs:
     container:
       image: ghcr.io/${{ github.repository_owner }}/syspac:latest
     steps:
-
       - name: Checkout code with submodules
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Debug syspac image environment
+        shell: bash
+        run: |
+          echo "User: $(whoami)"
+          echo "PATH: $PATH"
+          echo "Workspace: ${GITHUB_WORKSPACE}"
+          echo "Listing /usr/local/bin:"
+          ls -l /usr/local/bin || echo "/usr/local/bin not found"
+          echo "Where is syspac?"
+          command -v syspac || echo "syspac not in PATH"
 
       - name: Fix repository ownership for container user
         shell: bash
