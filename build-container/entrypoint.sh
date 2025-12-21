@@ -47,19 +47,22 @@ download_repo_files() {
 
     echo "Checking for existing repository files..."
 
+    # Determine release tag (default to 'repo' if not provided)
+    local release_tag="${RELEASE_TAG:-repo}"
+
     # Download database files if they exist, but don't fail if they don't
     for file in syspac.{db,files}{,.tar.gz}; do
-        echo "Attempting to download ${file}..."
+        echo "Attempting to download ${file} from tag ${release_tag}..."
         curl -sSfL -o "${file}" \
-             "https://github.com/${GITHUB_REPOSITORY}/releases/download/repository/${file}" || {
+             "https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/${file}" || {
             echo "Note: ${file} not found in repository (this is normal for first run)"
         }
     done
 
     # Download existing package files directly from the release
-    echo "Attempting to download existing packages..."
+    echo "Attempting to download existing packages from tag ${release_tag}..."
     curl -sSfL \
-         "https://github.com/${GITHUB_REPOSITORY}/releases/download/repository/" \
+         "https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/" \
          || echo "Note: unable to list release contents directly (this is expected without index)"
 
     # Best-effort download of common package patterns; pruning is handled by the workflow
