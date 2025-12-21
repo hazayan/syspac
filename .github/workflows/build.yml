@@ -69,8 +69,17 @@ jobs:
           echo "All packages in repository:"
           syspac list-packages --verbose
 
+      - name: List current packages (source of truth)
+        id: current_pkgs
+        shell: bash
+        run: |
+          CURRENT=$(syspac list-packages)
+          echo "Current packages: ${CURRENT}"
+          echo "current=${CURRENT}" >> $GITHUB_OUTPUT
+
     outputs:
       packages: ${{ steps.changes.outputs.packages }}
+      current_packages: ${{ steps.current_pkgs.outputs.current }}
 
   build:
     runs-on: ubuntu-latest
@@ -120,11 +129,11 @@ jobs:
             echo "No existing release found, starting fresh"
           fi
 
-      - name: List current packages (source of truth)
+      - name: Use current packages from preflight
         id: current_pkgs
         run: |
-          CURRENT=$(syspac list-packages)
-          echo "Current packages: ${CURRENT}"
+          CURRENT="${{ needs.preflight.outputs.current_packages }}"
+          echo "Current packages (from preflight): ${CURRENT}"
           echo "current=${CURRENT}" >> $GITHUB_OUTPUT
 
       - name: Prune packages that no longer exist
