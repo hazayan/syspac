@@ -7,9 +7,12 @@
 [submodule "niri"]
 	path = packages/niri
 	url = git@github.com:hazayan/pkg-niri.git
-[submodule "packages/paru"]
+[submodule "meli"]
+	path = packages/meli
+	url = git@github.com:hazayan/pkg-meli.git
+[submodule "paru"]
 	path = packages/paru
 	url = git@github.com:hazayan/pkg-paru.git
-[submodule "packages/zfsbootmenu"]
+[submodule "zfsbootmenu"]
 	path = packages/zfsbootmenu
 	url = git@github.com:hazayan/pkg-zbm.git
