@@ -7,9 +7,6 @@
 [submodule "paru"]
 	path = packages/paru
 	url = git@github.com:hazayan/pkg-paru.git
-[submodule "zfsbootmenu"]
-	path = packages/zfsbootmenu
-	url = git@github.com:hazayan/pkg-zbm.git
 [submodule "ly"]
 	path = packages/ly
 	url = git@github.com:hazayan/pkg-ly.git
