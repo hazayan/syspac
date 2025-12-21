@@ -182,8 +182,10 @@ jobs:
             fi
           done
 
-      - name: Rebuild pacman database from current packages
+      - name: Rebuild and sign pacman database from current packages
         working-directory: repo/x86_64
+        env:
+          GPG_KEY_ID: ${{ vars.GPG_KEY_ID }}
         run: |
           set -e
 
@@ -200,7 +202,27 @@ jobs:
           echo "Rebuilding pacman DB from the following packages:"
           ls -1 ./*.pkg.tar.*
 
-          repo-add syspac.db.tar.gz ./*.pkg.tar.*
+          # Sign packages if GPG key is available
+          if [ -n "${GPG_KEY_ID}" ]; then
+            echo "Signing packages..."
+            for pkg in ./*.pkg.tar.*; do
+              if [ -f "${pkg}" ]; then
+                echo "Signing ${pkg}..."
+                gpg --detach-sign --batch --yes -u "${GPG_KEY_ID}" "${pkg}"
+              fi
+            done
+          else
+            echo "GPG_KEY_ID is not set; skipping package signing."
+          fi
+
+          # Recreate the database, signed if key is available
+          if [ -n "${GPG_KEY_ID}" ]; then
+            echo "Creating signed database..."
+            repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz ./*.pkg.tar.*
+          else
+            echo "Creating unsigned database..."
+            repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
+          fi
 
       - name: Build builder image
         run: |

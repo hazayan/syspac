@@ -135,9 +135,9 @@ build_package() {
 }
 
 # Function to update repository database
-# NOTE: The GitHub Actions workflow now performs pruning of obsolete packages
-# and full DB rebuild from the current set of *.pkg.tar.* files. This function
-# is kept as a safety net for local/manual runs but avoids complex DB logic.
+# NOTE: In CI, the GitHub Actions workflow performs pruning of obsolete packages
+# and a full DB rebuild from the current set of *.pkg.tar.* files. This function
+# is retained only for potential non-CI/manual use.
 update_repo_db() {
     local dir="${REPO_ROOT}/x86_64"
     cd "${dir}"
@@ -179,11 +179,6 @@ update_repo_db() {
     sudo ln -svf syspac.db.tar.gz syspac.db
     sudo ln -svf syspac.files.tar.gz syspac.files
 
-    # For CI, ownership and permissions are managed by the outer workflow.
-    # Avoid forcing root:root here to prevent permission issues between runs.
-    # sudo chown root:root *
-    # sudo chmod 644 *
-
     echo "Repository database update completed (simple mode)"
     cd - >/dev/null
 }
@@ -209,7 +204,14 @@ else
 fi
 
 # Update repository database
-update_repo_db
+# In CI, the GitHub Actions workflow performs pruning and a full DB rebuild.
+# Skip the container-side DB update in CI to avoid lock/permission issues and
+# rely solely on the outer workflow for the production repository state.
+if [ "${GITHUB_ACTIONS-}" != "true" ]; then
+    update_repo_db
+else
+    echo "Skipping container-side update_repo_db in CI; outer workflow will rebuild DB."
+fi
 
 echo "============================================"
 echo "Build process completed successfully at $(date)"
