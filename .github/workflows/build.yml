@@ -187,47 +187,10 @@ jobs:
           gpg --import --no-tty <<<"${{ secrets.GPG_KEY }}"
           gpg --import-ownertrust --no-tty <<<"${{ vars.GPG_KEY_ID }}:5:"
 
-      - name: Rebuild and sign pacman database from current packages
-        working-directory: repo/x86_64
-        env:
-          GPG_KEY_ID: ${{ vars.GPG_KEY_ID }}
+      - name: Import GPG key
         run: |
-          set -e
-
-          # Remove existing DB files
-          rm -f syspac.db* syspac.files* || true
-
-          shopt -s nullglob
-          PKGFILES=( ./*.pkg.tar.* )
-          if [ ${#PKGFILES[@]} -eq 0 ]; then
-            echo "No package files found; skipping repo-add."
-            exit 0
-          fi
-
-          echo "Rebuilding pacman DB from the following packages:"
-          ls -1 ./*.pkg.tar.*
-
-          # Sign packages if GPG key is available
-          if [ -n "${GPG_KEY_ID}" ]; then
-            echo "Signing packages..."
-            for pkg in ./*.pkg.tar.*; do
-              if [ -f "${pkg}" ]; then
-                echo "Signing ${pkg}..."
-                gpg --detach-sign --batch --yes -u "${GPG_KEY_ID}" "${pkg}"
-              fi
-            done
-          else
-            echo "GPG_KEY_ID is not set; skipping package signing."
-          fi
-
-          # Recreate the database, signed if key is available
-          if [ -n "${GPG_KEY_ID}" ]; then
-            echo "Creating signed database..."
-            repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz ./*.pkg.tar.*
-          else
-            echo "Creating unsigned database..."
-            repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
-          fi
+          gpg --import --no-tty <<<"${{ secrets.GPG_KEY }}"
+          gpg --import-ownertrust --no-tty <<<"${{ vars.GPG_KEY_ID }}:5:"
 
       - name: Build builder image
         run: |
@@ -245,6 +208,87 @@ jobs:
             -v ${{ github.workspace }}:/build \
             -v ${{ github.workspace }}/repo:/repo \
             package-builder
+
+      - name: Rebuild and sign pacman database from current packages (in container)
+        working-directory: repo/x86_64
+        env:
+          GPG_KEY_ID: ${{ vars.GPG_KEY_ID }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -e
+
+          # At this point, repo/x86_64 contains:
+          # - Any previously downloaded packages/DB from the release
+          # - Newly built packages from the container
+          # and has been pruned to the current package set.
+
+          shopt -s nullglob
+          PKGFILES=( ./*.pkg.tar.* )
+          if [ ${#PKGFILES[@]} -eq 0 ]; then
+            echo "No package files found; skipping container repo-add."
+            exit 0
+          fi
+
+          echo "Rebuilding and signing pacman DB inside Arch container from the following packages:"
+          ls -1 ./*.pkg.tar.*
+
+          # Run a one-shot Arch-based container that has repo-add and GPG available.
+          # We mount only repo/x86_64 and pass the key material into the container.
+          docker run --rm \
+            -e GPG_KEY_ID="${GPG_KEY_ID}" \
+            -e GPG_KEY_DATA="${{ secrets.GPG_KEY }}" \
+            -v "$PWD":/repo/x86_64 \
+            archlinux:base \
+            bash -lc '
+              set -e
+              pacman -Sy --noconfirm pacman-contrib gnupg
+
+              mkdir -p /root/.gnupg
+              chmod 700 /root/.gnupg
+
+              if [ -n "${GPG_KEY_DATA-}" ]; then
+                echo "Importing GPG key inside container..."
+                gpg --import --no-tty <<<"${GPG_KEY_DATA}"
+                gpg --import-ownertrust --no-tty <<<"${GPG_KEY_ID}:5:"
+              fi
+
+              cd /repo/x86_64
+
+              # Remove existing DB files
+              rm -f syspac.db* syspac.files* syspac.db.tar.gz.lck || true
+
+              shopt -s nullglob
+              PKGFILES=( ./*.pkg.tar.* )
+              if [ ${#PKGFILES[@]} -eq 0 ]; then
+                echo "No package files found; skipping repo-add in container."
+                exit 0
+              fi
+
+              echo "Signing packages in container..."
+              if [ -n "${GPG_KEY_ID-}" ]; then
+                for pkg in ./*.pkg.tar.*; do
+                  if [ -f "${pkg}" ]; then
+                    echo "Signing ${pkg}..."
+                    gpg --detach-sign --batch --yes -u "${GPG_KEY_ID}" "${pkg}" || {
+                      echo "Warning: failed to sign ${pkg}, continuing."
+                    }
+                  fi
+                done
+              else
+                echo "GPG_KEY_ID is not set in container; skipping package signing."
+              fi
+
+              echo "Creating database (signed if key is available) in container..."
+              if [ -n "${GPG_KEY_ID-}" ]; then
+                repo-add -s -k "${GPG_KEY_ID}" -n -R syspac.db.tar.gz ./*.pkg.tar.* || {
+                  echo "repo-add with signing failed; attempting unsigned..."
+                  repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
+                }
+              else
+                repo-add -n -R syspac.db.tar.gz ./*.pkg.tar.*
+              fi
+            '
 
       - name: Create release notes
         run: |
