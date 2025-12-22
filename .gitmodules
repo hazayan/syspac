@@ -16,6 +16,3 @@
 [submodule "perl-boolean"]
 	path = packages/perl-boolean
 	url = git@github.com:hazayan/pkg-perl-boolean.git
-[submodule "zbm"]
-	path = packages/zbm
-	url = git@github.com:hazayan/pkg-zbm.git
