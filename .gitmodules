@@ -16,3 +16,6 @@
 [submodule "perl-boolean"]
 	path = packages/perl-boolean
 	url = git@github.com:hazayan/pkg-perl-boolean.git
+[submodule "zfsbootmenu"]
+	path = packages/zfsbootmenu
+	url = git@github.com:hazayan/pkg-zbm.git
