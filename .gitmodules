@@ -13,3 +13,6 @@
 [submodule "niri"]
 	path = packages/niri
 	url = git@github.com:hazayan/pkg-niri.git
+[submodule "aura"]
+	path = packages/aura
+	url = git@github.com:hazayan/pkg-aura.git
