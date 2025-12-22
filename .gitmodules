@@ -13,6 +13,3 @@
 [submodule "niri"]
 	path = packages/niri
 	url = git@github.com:hazayan/pkg-niri.git
-[submodule "artools"]
-	path = packages/artools
-	url = git@github.com:hazayan/artools.git
